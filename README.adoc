@@ -1,0 +1,148 @@
+:showtitle:
+:toc: left
+:icons: font
+
+= Steps
+
+* In omicron, run `cargo run --bin=omicron-dev -- run-all` start the whole stack locally.  It should look like this:
++
+[source,text]
+----
+omicron-dev: setting up all services ... 
+log file: /dangerzone/omicron_tmp/omicron-dev-omicron-dev.26644.0.log
+note: configured to log to "/dangerzone/omicron_tmp/omicron-dev-omicron-dev.26644.0.log"
+omicron-dev: services are running.
+omicron-dev: nexus external API:    127.0.0.1:12220
+omicron-dev: nexus internal API:    [::1]:12221
+omicron-dev: cockroachdb pid:       29396
+omicron-dev: cockroachdb URL:       postgresql://root@127.0.0.1:41978/omicron?sslmode=disable
+omicron-dev: cockroachdb directory: /dangerzone/omicron_tmp/.tmp6gX8Tx
+omicron-dev: external DNS name:     oxide-dev.test
+omicron-dev: external DNS HTTP:     http://[::1]:45687
+omicron-dev: external DNS:          [::1]:47166
+omicron-dev:   e.g. `dig @::1 -p 47166 test-suite-silo.sys.oxide-dev.test`
+omicron-dev: silo name:             test-suite-silo
+omicron-dev: privileged user name:  test-privileged
+----
+* If you want to see the network traffic, run `pfexec snoop -o snoop.out -I lo0`
+* In this repo, run `cargo run`.
+
+In the current version of the source, reqwest is configured to _not_ follow redirects.  You get:
+
+```
+Error: logging in
+
+Caused by:
+    Unexpected Response: Response { url: Url { scheme: "http", cannot_be_a_base: false, username: "", password: None, host: Some(Ipv4(127.0.0.1)), port: Some(12220), path: "//login/test-suite-silo/local", query: None, fragment: None }, status: 303, headers: {"location": "/", "set-cookie": "session=cdb10d5430e901b00050ff41480ad0afdc6869ee; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800", "x-request-id": "6a543c5a-bc48-43ac-8cb2-b0352d08b550", "content-length": "0", "date": "Tue, 02 May 2023 00:00:53 GMT"} }
+```
+
+Wireshark shows this network traffic.  The request:
+
+```
+POST //login/test-suite-silo/local HTTP/1.1
+content-type: application/json
+accept: */*
+host: 127.0.0.1:12220
+content-length: 49
+
+{"password":"oxide","username":"test-privileged"}
+```
+
+The response:
+
+```
+HTTP/1.1 303 See Other
+location: /
+set-cookie: session=cdb10d5430e901b00050ff41480ad0afdc6869ee; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800
+x-request-id: 6a543c5a-bc48-43ac-8cb2-b0352d08b550
+content-length: 0
+date: Tue, 02 May 2023 00:00:53 GMT
+
+```
+
+Note: all of these outputs are from a transient instance.  The session tokenis not valid anywhere else.
+
+If we configure reqwest to follow redirects (the default) with this change to src/bin/demo.rs:
+
+```
+     let reqwest_login_client = reqwest::ClientBuilder::new()
+         .connect_timeout(Duration::from_secs(15))
+-        .redirect(reqwest::redirect::Policy::none())
+         .timeout(Duration::from_secs(60))
+         .build()?;
+     let base_url = "http://127.0.0.1:12220/";
+```
+
+then we see:
+
+```
+logged in: status code 200 (Some("OK"))
+header: "content-type" = "text/html; charset=UTF-8"
+header: "cache-control" = "max-age=600"
+header: "x-request-id" = "8a52f74e-a7a5-4ab8-b5b7-b60a255d82fe"
+header: "content-length" = "2313"
+header: "date" = "Tue, 02 May 2023 00:04:30 GMT"
+Error: expected session cookie after login
+```
+
+That error comes from code looking for the set-cookie header.  We see all these request/responses:
+
+```
+POST //login/test-suite-silo/local HTTP/1.1
+content-type: application/json
+accept: */*
+host: 127.0.0.1:12220
+content-length: 49
+
+{"password":"oxide","username":"test-privileged"}
+HTTP/1.1 303 See Other
+location: /
+set-cookie: session=9caf99d1591c726b73d51e241882ef37f33bb9e8; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800
+x-request-id: 4f202291-a4ed-4fdb-baad-190321ed57dc
+content-length: 0
+date: Tue, 02 May 2023 00:04:30 GMT
+
+GET / HTTP/1.1
+accept: */*
+referer: http://127.0.0.1:12220//login/test-suite-silo/local
+host: 127.0.0.1:12220
+
+HTTP/1.1 302 Found
+location: /spoof_login?state=%2F
+x-request-id: da470f0d-5a3a-455f-bf5f-83d0ef1595ac
+content-length: 0
+date: Tue, 02 May 2023 00:04:30 GMT
+
+GET /spoof_login?state=%2F HTTP/1.1
+accept: */*
+referer: http://127.0.0.1:12220/
+host: 127.0.0.1:12220
+
+HTTP/1.1 200 OK
+content-type: text/html; charset=UTF-8
+cache-control: max-age=600
+x-request-id: 8a52f74e-a7a5-4ab8-b5b7-b60a255d82fe
+content-length: 2313
+date: Tue, 02 May 2023 00:04:30 GMT
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Oxide Console</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon-f85aa1d6.svg" />
+    <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAMKADAAQAAAABAAAAMAAAAADbN2wMAAAEmUlEQVRoBdVaXWhURxQ+s5tklZCfxiYrNmkxiQZJYv0BoYUSbdputORB2pcqebPF6Is+SB8qGBER9UFBzPahb4GU0r+HUrR/SURK2zxUmx+KYBTND+xGW7sqZpNspvONbva62Xv33plZdA8se+/MnDPfN3Nm7rlnLqMM0jp8NuhnhbsYsXZitJ4RvUDEfBma5rCIL3Cif4nTECf+XYLP9f7SfCCS3qHAlpKt/V0FRVXBTxjnhxhjxamaZ3/FOX/IGTs9G40cH9jWNZ9EtEhg65Uz5csKA18TY28mK5/Lf877Zubi7w1sPHgP+KRbYOTzAjwQiwEGVmBeJAC3ycXIi2kn/IyLICExgw8WbAErGjPt89Gfh2is+6LEXrevjareWm+UB9bEPJ+t86/Z3/6Rj/naTVmP/T1Bo4c/p4kvfqXEgxn5m+4foX8Gr1Nx/UoKVJYa6UoMeBEj3xQLjXT3iZttulbj0zG68ekPFLlwxdFUcPtGqt0bMkJEzEI/C4123xH7/QrHXh0qE/E5Gu+9TLd7LtHCzJxDy1SVb1khvdzRQjW73iB/oDBV4fFKrLC7rG20O6H6kJJ+fv4CxSP/eez6cfNAsIzq9m/XWB98QRAIe94m4OfXz35PseFbSsDTlUqbX6H6A+9S6brq9Kqs954IuPXzrL3aNFBZH64IqPi5DcasxV7XR1YCun6eFbFNA7frw5EA9vPpvmGbLmyKGaPSphoq37Caip7s+bNii7139SbFRsZJPJptFDMXV7Y2U+OxDzJXilIZT9jVPpq8a1e1pJwV+GnVzi1yewy8mPlhFb8Tk9vt1LeDxOfF5udCHk04Y3Ak4MK+bBKoKqOmkx1U0rDKUQXE1hxsp5U7NtPIxz0Uj6ptv9ZOtF9SAH7TZ51ZwVs7BVHoQFdXtAjAbZpOdZCdyziBgw5mDTZ0RIsAfL5krbPbOIHDTMCGjqgTELsN4hldkTaELVVRJoCtUsV10oHCBmypijIB7POmRMeWMoHkQ8oECR1bygRMADdhQ5kAwgNTomNLmQBiG1OiY0uZAAIzxDa6AhsyyFM0pEwAUSXeg3VF2vAYoVr7VCcgrCCqvH9tymrP0zV0YUNHtAggJJZRpYIrwXWg6zastiOpRQBGERL/uSfsaSYw8tAxEU4beR+QJD4Mu3+h+eYP4okFu0H1VO5IYPlLK+iBSx+HK0x++RtNfvW70VfK5dXOOTfHd2IMReSnv+iGSNKqJq88DaelMV7qa0VSOPj2q5bSpZdZCUAlr9MqVs4ysRUWCdyLzglcq46X62CbSPx2ekv8upqBdBDPWWpRPbmruz7c+nn6AKbuRXI379PrRg84XKwPFT9PjfjTVzjg8Nft21EhTmhCT1d5vysoDlBlSyNVvN5AD29GlzxlkUJvPLGbqt9/jdDWhIgDjnO5PeQThx8QvUOMzFSTh3wyn/HOaPiICIq6MjdVLxWdSGUxw+pGbDRFINL1Y2PnURnM4fhexPd9Nm2ViwE8F+CBVWIWyBaHJq8/NcAQ49uDmeloCFMD/1Ie9hwpAhOwAWPyOwl0tTgD1n7z6XOb/wFA+SeiKjBpYAAAAABJRU5ErkJggg==" />
+    <script type="module" crossorigin src="/assets/app-3c717f55.js"></script>
+    <link rel="stylesheet" href="/assets/index-3d031f1b.css">
+  </head>
+  <body>
+    <div id="root"></div>
+
+  </body>
+</html>
+```
+
+So reqwest is silently following the redirects and progenitor only sees the last request (which we can tell from the request-id).  It doesn't have the cookie we need.

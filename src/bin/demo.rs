@@ -1,21 +1,22 @@
 use anyhow::anyhow;
 use anyhow::Context;
-use oxide_client::types::UsernamePasswordCredentials;
-use oxide_client::Client;
-use oxide_client::ClientLoginExt;
+use oxide_client_test::types::UsernamePasswordCredentials;
+use oxide_client_test::Client;
+use oxide_client_test::ClientLoginExt;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let silo_name = "test-suite-silo";
-    let username: oxide_client::types::UserId =
+    let username: oxide_client_test::types::UserId =
         "test-privileged".parse().map_err(|s| {
             anyhow!("parsing configured recovery user name: {:?}", s)
         })?;
-    let password: oxide_client::types::Password = "oxide".parse().unwrap();
+    let password: oxide_client_test::types::Password = "oxide".parse().unwrap();
 
     let reqwest_login_client = reqwest::ClientBuilder::new()
         .connect_timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(60))
         .build()?;
     let base_url = "http://127.0.0.1:12220/";
